@@ -87,7 +87,7 @@ impl PackageManager {
         fs::create_dir_all(&download_dir)?;
         env::set_current_dir(&download_dir)?;
 
-        let output = Command::new("curl").args(&["-LO", &package.url]).output()?;
+        let output = Command::new("curl").args(["-LO", &package.url]).output()?;
         if !output.status.success() {
             return Err(format!("Failed to download package: {}", package.name).into());
         }
@@ -115,7 +115,7 @@ impl PackageManager {
         let tarball_path = download_dir.join(source_tarball);
 
         Command::new("tar")
-            .args(&["xzf", tarball_path.to_str().unwrap()])
+            .args(["xzf", tarball_path.to_str().unwrap()])
             .status()?;
 
         // Move into the extracted directory
