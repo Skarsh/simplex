@@ -67,16 +67,17 @@ impl PackageManager {
                         let package = Package {
                             name: name.to_string(),
                             version: version.to_string(),
-                            dependencies: vec![],   // We would need to store this info somewhere
-                            build_steps: vec![],    // Same here
-                            url: String::new(),     // And here
+                            dependencies: vec![], // We would need to store this info somewhere
+                            build_steps: vec![],  // Same here
+                            url: String::new(),   // And here
                         };
-                        self.installed_packages.insert(name_version.to_string(), package);
+                        self.installed_packages
+                            .insert(name_version.to_string(), package);
                     }
                 }
             }
         }
-            
+
         Ok(())
     }
 
@@ -160,11 +161,15 @@ impl PackageManager {
 
     fn install_package(&mut self, package: &Package) -> Result<(), Box<dyn Error>> {
         println!("Instsalling package: {}", package.name);
-        let install_path = self.store_path.join("installed").join(format!("{}-{}", package.name, package.version));
+        let install_path = self
+            .store_path
+            .join("installed")
+            .join(format!("{}-{}", package.name, package.version));
 
         // The `make install` step should have already installed the package to our custom prefix
         // We just need to record that it's installed
-        self.installed_packages.insert(package.name.clone(), package.clone());
+        self.installed_packages
+            .insert(package.name.clone(), package.clone());
         println!("Package installed to: {}", install_path.display());
 
         Ok(())
@@ -180,7 +185,6 @@ impl PackageManager {
         } else {
             Err(format!("Package not found: {} {}", name, version).into())
         }
-
     }
 
     fn list_packages(&self) {
