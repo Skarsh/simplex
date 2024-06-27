@@ -1,1 +1,5 @@
+# Rust specifics
 /target
+
+# Simplex development and test directories
+/store
