@@ -6,6 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use toml;
+use toml::Value;
+
 #[derive(Debug, Clone)]
 struct Package {
     name: String,
@@ -13,6 +16,139 @@ struct Package {
     dependencies: Vec<String>,
     build_steps: Vec<String>,
     url: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PackageDescription {
+    package: NewPackage,
+    source: Source,
+    build: Build,
+    dependencies: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct NewPackage {
+    name: String,
+    version: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Source {
+    url: String,
+    sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Build {
+    system: String,
+    arguments: Vec<String>,
+}
+
+fn parse_package(toml: &Value) -> Result<NewPackage, Box<dyn Error>> {
+    let package = toml
+        .get("package")
+        .ok_or("Missing [package] section")?
+        .as_table()
+        .ok_or("Invalid [package] section")?;
+
+    let name = package
+        .get("name")
+        .ok_or("Missing name in [package]")?
+        .as_str()
+        .ok_or("Invalid name in [package]")?
+        .to_string();
+
+    let version = package
+        .get("version")
+        .ok_or("Missing version in [package]")?
+        .as_str()
+        .ok_or("Invalid version in [package]")?
+        .to_string();
+
+    Ok(NewPackage { name, version })
+}
+
+fn parse_source(toml: &Value) -> Result<Source, Box<dyn Error>> {
+    let source = toml
+        .get("source")
+        .ok_or("Missing [source] section")?
+        .as_table()
+        .ok_or("Invalid [source] section")?;
+
+    let url = source
+        .get("url")
+        .ok_or("Missing url in [source]")?
+        .as_str()
+        .ok_or("Invalid url in [source]")?
+        .to_string();
+
+    let sha256 = source
+        .get("sha256")
+        .ok_or("Missing sha256 in [source]")?
+        .as_str()
+        .ok_or("Invalid sha256 in [source]")?
+        .to_string();
+
+    Ok(Source { url, sha256 })
+}
+
+fn parse_build(toml: &Value) -> Result<Build, Box<dyn Error>> {
+    let build = toml
+        .get("build")
+        .ok_or("Missing [build] section")?
+        .as_table()
+        .ok_or("Invalid [build] section")?;
+
+    let system = build
+        .get("system")
+        .ok_or("Missing system in [build]")?
+        .as_str()
+        .ok_or("Invalid system in [build]")?
+        .to_string();
+
+    let arguments = build
+        .get("arguments")
+        .ok_or("Missing arguments in [build]")?
+        .as_array()
+        .ok_or("Invalid arguments in [build]")?
+        .iter()
+        .map(|v| v.as_str().ok_or("Invalid argument"))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+    Ok(Build { system, arguments })
+}
+
+fn parse_dependencies(toml: &Value) -> Result<HashMap<String, String>, Box<dyn Error>> {
+    let binding = toml::value::Table::new();
+    let dependencies = toml
+        .get("dependencies")
+        .map(|v| v.as_table())
+        .unwrap_or(None)
+        .unwrap_or(&binding);
+
+    dependencies
+        .iter()
+        .map(|(k, v)| {
+            Ok((
+                k.clone(),
+                v.as_str().ok_or("Invalid dependency version")?.to_string(),
+            ))
+        })
+        .collect()
+}
+
+fn parse_package_description(toml_str: &str) -> Result<PackageDescription, Box<dyn Error>> {
+    let toml: toml::Value = toml::from_str(toml_str)?;
+
+    Ok(PackageDescription {
+        package: parse_package(&toml)?,
+        source: parse_source(&toml)?,
+        build: parse_build(&toml)?,
+        dependencies: parse_dependencies(&toml)?,
+    })
 }
 
 struct PackageManager {
@@ -47,8 +183,10 @@ impl PackageManager {
         ];
 
         for dir in &dirs {
-            fs::create_dir_all(dir)?;
-            println!("Created directory: {}", dir.display());
+            if !dir.exists() {
+                fs::create_dir_all(dir)?;
+                println!("Created directory: {}", dir.display());
+            }
         }
 
         Ok(())
@@ -288,5 +426,145 @@ fn main() {
     if let Err(err) = run() {
         eprintln!("Error: {}", err);
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VALID_TOML: &str = r#"
+    [package]
+    name = "sqlite"
+    version = "3.36.0"
+    [source]
+    url = "https://www.sqlite.org/2021/sqlite-autoconf-3360000.tar.gz" 
+    sha256 = "bd90c3eb96bee996206b83be7065c9ce19aef38c3f4fb53073ada0d0b69bbce3"
+    [build]
+    system = "make"
+    arguments = ["install", "prefix=/simplex/store"]
+    [dependencies]
+    libsomething = "^6.0"
+    [env]
+    CFLAGS = "-DSQLITE_ENABLE_COLUMN_METADATA=1"
+    "#;
+
+    #[test]
+    fn test_parse_package_valid() {
+        let toml: Value = toml::from_str(VALID_TOML).unwrap();
+        let result = parse_package(&toml);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            NewPackage {
+                name: "sqlite".to_string(),
+                version: "3.36.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_source_valid() {
+        let toml: Value = toml::from_str(VALID_TOML).unwrap();
+        let result = parse_source(&toml);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            Source {
+                url: "https://www.sqlite.org/2021/sqlite-autoconf-3360000.tar.gz".to_string(),
+                sha256: "bd90c3eb96bee996206b83be7065c9ce19aef38c3f4fb53073ada0d0b69bbce3"
+                    .to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_build_valid() {
+        let toml: Value = toml::from_str(VALID_TOML).unwrap();
+        let result = parse_build(&toml);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            Build {
+                system: "make".to_string(),
+                arguments: vec!["install".to_string(), "prefix=/simplex/store".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_dependencies_valid() {
+        let toml: Value = toml::from_str(VALID_TOML).unwrap();
+        let result = parse_dependencies(&toml);
+        assert!(result.is_ok());
+        let mut expected = HashMap::new();
+        expected.insert("libsomething".to_string(), "^6.0".to_string());
+        assert_eq!(result.unwrap(), expected);
+    }
+
+    #[test]
+    fn test_parse_package_description_valid() {
+        let result = parse_package_description(VALID_TOML);
+        assert!(result.is_ok());
+        let pkg_desc = result.unwrap();
+        assert_eq!(
+            pkg_desc.package,
+            NewPackage {
+                name: "sqlite".to_string(),
+                version: "3.36.0".to_string()
+            }
+        );
+        assert_eq!(
+            pkg_desc.source,
+            Source {
+                url: "https://www.sqlite.org/2021/sqlite-autoconf-3360000.tar.gz".to_string(),
+                sha256: "bd90c3eb96bee996206b83be7065c9ce19aef38c3f4fb53073ada0d0b69bbce3"
+                    .to_string(),
+            }
+        );
+        assert_eq!(
+            pkg_desc.build,
+            Build {
+                system: "make".to_string(),
+                arguments: vec!["install".to_string(), "prefix=/simplex/store".to_string()],
+            }
+        );
+        assert_eq!(
+            pkg_desc.dependencies.get("libsomething"),
+            Some(&"^6.0".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_package_description_missing_section() {
+        let toml_str = r#"
+        [package]
+        name = "sqlite"
+        version = "3.36.0"
+        "#;
+        let result = parse_package_description(toml_str);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Missing [source] section");
+    }
+
+    #[test]
+    fn test_parse_package_description_invalid_type() {
+        let toml_str = r#"
+        [package]
+        name = "sqlite"
+        version = 3.36
+        [source]
+        url = "https://www.sqlite.org/2021/sqlite-autoconf-3360000.tar.gz" 
+        sha256 = "bd90c3eb96bee996206b83be7065c9ce19aef38c3f4fb53073ada0d0b69bbce3"
+        [build]
+        system = "make"
+        arguments = ["install"]
+        "#;
+        let result = parse_package_description(toml_str);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Invalid version in [package]"
+        );
     }
 }
